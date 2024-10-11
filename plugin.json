@@ -1,5 +1,5 @@
 {
-    "id": "friendsofbotble/coinbase",
+    "id": "friendsofbotble/fob-coinbase",
     "name": "Coinbase Payment Gateway",
     "namespace": "FriendsOfBotble\\Coinbase\\",
     "provider": "FriendsOfBotble\\Coinbase\\Providers\\CoinbaseServiceProvider",
@@ -8,5 +8,5 @@
     "version": "1.0.0",
     "description": "Coinbase payment gateway integration",
     "minimum_core_version": "7.0.0",
-    "require": ["botble/ecommerce", "botble/payment"]
+    "require": ["botble/payment"]
 }
