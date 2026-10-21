@@ -82,7 +82,9 @@ class CoinbaseController extends Controller
             $data = json_decode($payload, true);
             $chargeId = $data['event']['data']['id'] ?? null;
 
-            abort_unless($chargeId, SymfonyResponse::HTTP_NOT_FOUND);
+            if (! $chargeId) {
+                return response('Not found.', SymfonyResponse::HTTP_NOT_FOUND);
+            }
 
             $payment = Payment::query()
                 ->where('charge_id', $chargeId)
