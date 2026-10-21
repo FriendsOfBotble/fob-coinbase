@@ -59,7 +59,7 @@ class CoinbasePaymentService extends CoinbasePaymentAbstract
 
             $charge = Charge::retrieve($chargeId);
 
-            if ($charge && $pricing = $charge->getAttribute('pricing')['local']) {
+            if ($charge && $pricing = ($charge->getAttribute('pricing')['local'] ?? null)) {
                 $metadata = $charge->getAttribute('metadata');
 
                 do_action(PAYMENT_ACTION_PAYMENT_PROCESSED, [
