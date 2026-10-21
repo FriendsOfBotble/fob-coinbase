@@ -5,7 +5,6 @@ namespace FriendsOfBotble\Coinbase\Services\Gateways;
 use FriendsOfBotble\Coinbase\Library\Resources\Charge;
 use FriendsOfBotble\Coinbase\Services\Abstracts\CoinbasePaymentAbstract;
 use Botble\Payment\Enums\PaymentStatusEnum;
-use Botble\Payment\Models\Payment;
 use Exception;
 use Illuminate\Support\Arr;
 
@@ -55,11 +54,6 @@ class CoinbasePaymentService extends CoinbasePaymentAbstract
 
     public function afterMakePayment(string $chargeId): string
     {
-        // The success page and the webhook both land here, only record the payment once.
-        if (Payment::query()->where('charge_id', $chargeId)->exists()) {
-            return $chargeId;
-        }
-
         try {
             $this->setClient();
 
