@@ -82,8 +82,9 @@ class CoinbaseController extends Controller
             $data = json_decode($payload, true);
             $chargeId = $data['event']['data']['id'] ?? null;
 
+            // Coinbase retries any non-2xx response for days, so acknowledge what can never succeed.
             if (! $chargeId) {
-                return response('Not found.', SymfonyResponse::HTTP_NOT_FOUND);
+                return response('Not found.');
             }
 
             $payment = Payment::query()
@@ -99,7 +100,7 @@ class CoinbaseController extends Controller
             }
 
             if (! $payment) {
-                return response('Not found.', SymfonyResponse::HTTP_NOT_FOUND);
+                return response('Not found.');
             }
 
             if ($payment->status == PaymentStatusEnum::COMPLETED) {
@@ -108,10 +109,10 @@ class CoinbaseController extends Controller
 
             switch ($event->getAttribute('type')) {
                 case 'charge:confirmed':
-                    if (! $this->matchesPaymentAmount($payment, $data['event']['data']['pricing']['local'] ?? null)) {
-                        logger()->warning('[COINBASE] Charge amount does not match payment ' . $payment->getKey());
+                    if (! $this->isFullyPaid($payment, $data['event']['data'] ?? [])) {
+                        logger()->warning('[COINBASE] Confirmed charge does not cover payment ' . $payment->getKey());
 
-                        return response('Amount mismatch.', SymfonyResponse::HTTP_BAD_REQUEST);
+                        return response('Amount mismatch.');
                     }
 
                     $payment->status = PaymentStatusEnum::COMPLETED;
@@ -139,13 +140,30 @@ class CoinbaseController extends Controller
         }
     }
 
-    protected function matchesPaymentAmount(Payment $payment, ?array $localPricing): bool
+    /**
+     * Coinbase only sends charge:confirmed for a fully paid charge, so this is a second check: pricing.local is the
+     * price that was asked for, the amounts actually received are in payments[].value.local. When the event carries
+     * no usable payment data, trust the confirmation as before.
+     */
+    protected function isFullyPaid(Payment $payment, array $charge): bool
     {
-        if (! $localPricing || ! isset($localPricing['amount'], $localPricing['currency'])) {
+        $currency = strtoupper((string) $payment->currency);
+        $payments = collect($charge['payments'] ?? [])
+            ->filter(fn ($item) => is_array($item) && is_numeric(data_get($item, 'value.local.amount')))
+            ->reject(fn ($item) => isset($item['status']) && strtoupper((string) $item['status']) !== 'CONFIRMED');
+
+        if ($payments->isEmpty()) {
+            logger()->info('[COINBASE] Confirmed charge without payment details for payment ' . $payment->getKey());
+
+            return true;
+        }
+
+        if ($payments->contains(fn ($item) => strtoupper((string) data_get($item, 'value.local.currency')) !== $currency)) {
             return false;
         }
 
-        return strtoupper((string) $localPricing['currency']) === strtoupper((string) $payment->currency)
-            && round((float) $localPricing['amount'], 2) >= round((float) $payment->amount, 2);
+        $paid = $payments->sum(fn ($item) => (float) data_get($item, 'value.local.amount'));
+
+        return round($paid, 2) >= round((float) $payment->amount, 2);
     }
 }
