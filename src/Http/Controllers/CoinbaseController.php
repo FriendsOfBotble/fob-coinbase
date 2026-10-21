@@ -2,6 +2,7 @@
 
 namespace FriendsOfBotble\Coinbase\Http\Controllers;
 
+use FriendsOfBotble\Coinbase\Library\Exceptions\SignatureVerificationException;
 use FriendsOfBotble\Coinbase\Library\Webhook;
 use FriendsOfBotble\Coinbase\Services\Gateways\CoinbasePaymentService;
 use Botble\Base\Http\Responses\BaseHttpResponse;
@@ -22,6 +23,13 @@ class CoinbaseController extends Controller
         CoinbasePaymentService $coinbasePaymentService
     ): BaseHttpResponse {
         $chargeId = session('coinbase_charge_id');
+
+        if (! $chargeId) {
+            return $response
+                ->setError()
+                ->setNextUrl(PaymentHelper::getCancelURL())
+                ->setMessage(__('Payment failed!'));
+        }
 
         try {
             if ($coinbasePaymentService->afterMakePayment($chargeId) && ! $coinbasePaymentService->getErrorMessage()) {
@@ -56,11 +64,16 @@ class CoinbaseController extends Controller
 
     public function webhook(Request $request, CoinbasePaymentService $coinbasePaymentService): Response
     {
-        $secret = setting('payment_coinbase_webhook_key');
-        $signature = $request->header('X-Cc-Webhook-Signature');
+        $secret = (string) setting('payment_coinbase_webhook_key');
+        $signature = (string) $request->header('X-Cc-Webhook-Signature');
         $payload = $request->getContent();
 
-        logger()->info('[COINBASE] Webhook Received (signature: ' . $signature . '): ' . $payload);
+        logger()->info('[COINBASE] Webhook Received: ' . $payload);
+
+        // Without a shared secret the HMAC can be computed by anyone, so refuse instead of accepting.
+        if ($secret === '' || $signature === '') {
+            return response('Invalid signature.', SymfonyResponse::HTTP_BAD_REQUEST);
+        }
 
         try {
             $coinbasePaymentService->setClient();
@@ -77,10 +90,28 @@ class CoinbaseController extends Controller
 
             if (! $payment) {
                 $coinbasePaymentService->afterMakePayment($chargeId);
+
+                $payment = Payment::query()
+                    ->where('charge_id', $chargeId)
+                    ->first();
+            }
+
+            if (! $payment) {
+                return response('Not found.', SymfonyResponse::HTTP_NOT_FOUND);
+            }
+
+            if ($payment->status == PaymentStatusEnum::COMPLETED) {
+                return response('Ok.');
             }
 
             switch ($event->getAttribute('type')) {
                 case 'charge:confirmed':
+                    if (! $this->matchesPaymentAmount($payment, $data['event']['data']['pricing']['local'] ?? null)) {
+                        logger()->warning('[COINBASE] Charge amount does not match payment ' . $payment->getKey());
+
+                        return response('Amount mismatch.', SymfonyResponse::HTTP_BAD_REQUEST);
+                    }
+
                     $payment->status = PaymentStatusEnum::COMPLETED;
                     $payment->save();
 
@@ -93,12 +124,26 @@ class CoinbaseController extends Controller
             }
 
             return response('Ok.');
+        } catch (SignatureVerificationException $exception) {
+            report($exception);
+
+            return response('Invalid signature.', SymfonyResponse::HTTP_BAD_REQUEST);
         } catch (ModelNotFoundException) {
             return response('Not found.');
         } catch (Exception $exception) {
             report($exception);
 
-            return response($exception->getMessage());
+            return response('Error.', SymfonyResponse::HTTP_BAD_REQUEST);
         }
+    }
+
+    protected function matchesPaymentAmount(Payment $payment, ?array $localPricing): bool
+    {
+        if (! $localPricing || ! isset($localPricing['amount'], $localPricing['currency'])) {
+            return false;
+        }
+
+        return strtoupper((string) $localPricing['currency']) === strtoupper((string) $payment->currency)
+            && round((float) $localPricing['amount'], 2) >= round((float) $payment->amount, 2);
     }
 }
